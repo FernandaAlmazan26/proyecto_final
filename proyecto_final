@@ -1,0 +1,799 @@
+###  SQL
+
+mysql> CREATE USER 'Fersita_pro'@'localhost' IDENTIFIED BY '26forever';
+Query OK, 0 rows affected (0.05 sec)
+mysql›> GRANT ALL PRIVILEGES ON ** TO 'Fersita_pro'@'localhost' WITH GRANT OPTION;
+Query OK, e rows affected (0.02 sec)
+mysql› FLUSH PRIVILEGES;
+Query OK, 0 rows affected (0.01 sec)
+mysql>
+
+Crear base de datos
+CREATE DATABASE hospital_db;
+
+USE hospital_db;
+
+-- Tabla de usuarios (doctores y administradores)
+CREATE TABLE usuarios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(50) NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  password VARCHAR(255) NOT NULL,
+  rol ENUM('doctor', 'admin') NOT NULL
+);
+
+-- Tabla de pacientes
+CREATE TABLE pacientes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(50) NOT NULL,
+  edad INT,
+  estado_paciente VARCHAR(100),
+  proxima_cita TIMESTAMP,
+  fecha_ingreso TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  doctor_id INT,
+  FOREIGN KEY (doctor_id) REFERENCES usuarios(id)
+);
+
+-- Tabla de archivos subidos
+CREATE TABLE archivos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre_archivo VARCHAR(255),
+  tipo_archivo VARCHAR(50),
+  fecha_subida TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  usuario_id INT,
+  FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
+
+###server
+const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcrypt');
+const app = express();
+const path = require('path');
+const bodyParser = require('body-parser');
+const mysql = require('mysql2'); 
+
+app.use(bodyParser.urlencoded({ extended: true }));
+
+
+// Configuración de la sesión
+app.use(session({
+  secret: 'secretKey',
+  resave: false,
+  saveUninitialized: false,
+}));
+
+
+function requireRole(roles) {
+  return (req, res, next) => {
+    if (req.session.user && roles.includes(req.session.user.tipo_usuario)) {
+      next(); 
+    } else {
+      res.status(403).send('Acceso denegado'); 
+    }
+  };
+}
+
+function requireLogin(req, res, next) {
+  if (!req.session.user) {
+    return res.redirect('/login.html');
+  }
+  next();
+}
+
+// Ruta para la página principal
+app.get('/',  (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'pacientes.html'));
+});
+
+app.use(express.urlencoded({ extended: true }));
+
+// Servir archivos estáticos (HTML)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Configurar conexión a MySQL
+
+const connection = mysql.createConnection({
+  host: 'localhost',
+  user: 'root',
+  password: 'Fa260103.', // Cambia por tu contraseña
+  database: 'proyecto_final'
+});
+
+connection.connect(err => {
+  if (err) {
+    console.error('Error conectando a MySQL:', err);
+    return;
+  }
+  console.log('Conexión exitosa a MySQL');
+});
+
+
+
+// Registro de usuario
+app.post('/registro', (req, res) => {
+    const { nombre_usuario, contrasena, rol } = req.body;
+
+    // Validar que el rol sea 'doctor' o 'administrador'
+    if (!['doctor', 'administrador'].includes(rol)) {
+        return res.send('Rol de acceso inválido');
+    }
+
+    // Hashear la contraseña antes de guardarla
+    const hashedPassword = bcrypt.hashSync(contrasena, 10);
+
+    const insertUser = 'INSERT INTO usuarios (nombre_usuario, contrasena, rol) VALUES (?, ?, ?)';
+    connection.query(insertUser, [nombre_usuario, hashedPassword, rol], (err) => {
+        if (err) {
+            console.error(err);
+            return res.send('Error al registrar usuario o nombre de usuario ya existe');
+        }
+        res.redirect('/login.html');
+    });
+});
+
+// Iniciar sesión
+app.post('/login', (req, res) => {
+    const { nombre_usuario, contrasena } = req.body;
+
+    const query = 'SELECT * FROM usuarios WHERE nombre_usuario = ?';
+    connection.query(query, [nombre_usuario], (err, results) => {
+        if (err) {
+            console.error(err);
+            return res.send('Error al obtener el usuario');
+        }
+
+        if (results.length === 0) {
+            return res.send('Usuario no encontrado');
+        }
+
+        const user = results[0];
+
+        // Verificar la contraseña
+        const isPasswordValid = bcrypt.compareSync(contrasena, user.contrasena);
+        if (!isPasswordValid) {
+            return res.send('Contraseña incorrecta');
+        }
+
+        // Almacenar la información del usuario en la sesión
+        req.session.user = {
+            id: user.id,
+            nombre_usuario: user.nombre_usuario,
+            rol: user.rol // Aquí se establece el rol del usuario en la sesión
+        };
+
+        res.redirect('/');
+    });
+});
+
+// Ruta para obtener el tipo de usuario actual
+function requireLogin(req, res, next) {
+    if (!req.session.user) {
+        return res.status(401).send('No has iniciado sesión');
+    }
+    next();
+}
+
+app.get('/tipo-usuario', requireLogin, (req, res) => {
+    res.json({ rol: req.session.user.rol });
+});
+
+// Cerrar sesión
+app.get('/logout', (req, res) => {
+    req.session.destroy();
+    res.redirect('/login.html');
+});
+
+
+// Ruta para la página principal
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'pacientes.html'));
+});
+
+// Ruta para registrar un doctor
+app.post('/submit-doctor', (req, res) => {
+  const { id, nombre, especialidad } = req.body;
+
+  const query = `INSERT INTO doctores (id, nombre, especialidad) VALUES (?, ?, ?)`;
+
+  connection.query(query, [id, nombre, especialidad], (err, result) => {
+    if (err) {
+      console.error('Error al guardar el doctor en la base de datos:', err.sqlMessage);
+      return res.status(500).send('Error al registrar el doctor en la base de datos.');
+    }
+    res.send(`Doctor ${nombre} registrado correctamente.`);
+  });
+});
+
+// Ruta para registrar un paciente
+app.post('/submit-data', (req, res) => {
+  const { nombre, edad, estado_paciente, proxima_cita } = req.body;
+
+  const query = `
+    INSERT INTO pacientes (nombre, edad, estado_paciente, proxima_cita, fecha_ingreso) 
+    VALUES (?, ?, ?, ?, NOW())
+  `;
+
+  connection.query(query, [nombre, edad, estado_paciente, proxima_cita], (err, result) => {
+    if (err) {
+      console.error('Error al guardar el paciente en la base de datos:', err.sqlMessage);
+      return res.status(500).send('Error al registrar el paciente en la base de datos.');
+    }
+    res.send(`Paciente ${nombre} registrado correctamente.`);
+  });
+});
+
+// Ruta para mostrar los pacientes en formato HTML
+app.get('/pacientes', (req, res) => {
+  connection.query('SELECT * FROM pacientes', (err, results) => {
+    if (err) {
+      console.error('Error al obtener los datos:', err);
+      return res.status(500).send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Pacientes Registrados</title>
+        <link rel="stylesheet" href="/styles.css">
+        <style>
+          table {
+            width: 80%;
+            margin: 20px auto;
+            border-collapse: collapse;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            background-color: #fff;
+          }
+          th, td {
+            padding: 12px;
+            text-align: center;
+            border: 1px solid #ddd;
+          }
+          th {
+            background-color: #007BFF;
+            color: #fff;
+          }
+          tr:nth-child(even) {
+            background-color: #f2f2f2;
+          }
+          tr:hover {
+            background-color: #ddd;
+          }
+          h1 {
+            text-align: center;
+            color: #333;
+          }
+          button {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background-color: #28a745;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+          }
+          button:hover {
+            background-color: #218838;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Pacientes Registrados</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nombre</th>
+              <th>Edad</th>
+              <th>Estado del Paciente</th>
+              <th>Próxima Cita</th>
+              <th>Fecha de Ingreso</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    // Generar filas de la tabla
+    results.forEach(paciente => {
+      html += `
+        <tr>
+          <td>${paciente.id}</td>
+          <td>${paciente.nombre}</td>
+          <td>${paciente.edad}</td>
+          <td>${paciente.estado_paciente || 'N/A'}</td>
+          <td>${new Date(paciente.proxima_cita).toLocaleString()}</td>
+          <td>${new Date(paciente.fecha_ingreso).toLocaleString()}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+// Ruta para buscar pacientes según filtros
+app.get('/buscar-pacientes', (req, res) => {
+  const { name_search, age_search } = req.query;
+
+  // Query base con parámetros seguros (evitar inyección SQL)
+  let query = `
+    SELECT id, nombre, edad, estado_paciente, proxima_cita, fecha_ingreso, doctor_id
+    FROM pacientes
+    WHERE 1=1
+  `;
+
+  // Arreglo para almacenar los valores de parámetros
+  const params = [];
+
+  if (name_search) {
+    query += ' AND nombre LIKE ?';
+    params.push(`%${name_search}%`);
+  }
+  if (age_search) {
+    query += ' AND edad = ?';
+    params.push(age_search);
+  }
+
+  connection.query(query, params, (err, results) => {
+    if (err) {
+      console.error('Error al buscar pacientes:', err);
+      return res.status(500).send('Error al obtener los datos.');
+    }
+
+    // Construcción del HTML
+    let html = `
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Resultados de Búsqueda</title>
+        <link rel="stylesheet" href="/styles.css">
+        <style>
+          table {
+            width: 90%;
+            margin: 20px auto;
+            border-collapse: collapse;
+            background-color: #fff;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+          }
+          th, td {
+            padding: 10px;
+            text-align: center;
+            border: 1px solid #ddd;
+          }
+          th {
+            background-color: #007BFF;
+            color: #fff;
+          }
+          tr:nth-child(even) {
+            background-color: #f2f2f2;
+          }
+          tr:hover {
+            background-color: #ddd;
+          }
+          h1 {
+            text-align: center;
+            margin: 20px 0;
+          }
+          button {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background-color: #28a745;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+          }
+          button:hover {
+            background-color: #218838;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Resultados de Búsqueda</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nombre</th>
+              <th>Edad</th>
+              <th>Estado del Paciente</th>
+              <th>Próxima Cita</th>
+              <th>Fecha de Ingreso</th>
+              <th>Doctor ID</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    // Generar las filas de la tabla con los resultados
+    results.forEach(paciente => {
+      html += `
+        <tr>
+          <td>${paciente.id}</td>
+          <td>${paciente.nombre}</td>
+          <td>${paciente.edad}</td>
+          <td>${paciente.estado_paciente || 'N/A'}</td>
+          <td>${paciente.proxima_cita ? new Date(paciente.proxima_cita).toLocaleString() : 'N/A'}</td>
+          <td>${new Date(paciente.fecha_ingreso).toLocaleString()}</td>
+          <td>${paciente.doctor_id || 'N/A'}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    // Enviar la respuesta con el HTML
+    res.send(html);
+  });
+});
+// Ruta para ordenar pacientes por próxima cita
+app.get('/ordenar-pacientes', (req, res) => {
+  const query = 'SELECT * FROM pacientes ORDER BY proxima_cita ASC';
+
+  connection.query(query, (err, results) => {
+    if (err) {
+      console.error('Error al obtener los datos ordenados:', err);
+      return res.send('Error al obtener los datos.');
+    }
+
+    // HTML con la tabla ordenada
+    let html = `
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Pacientes Ordenados por Próxima Cita</title>
+        <link rel="stylesheet" href="/styles.css">
+        <style>
+          table {
+            width: 80%;
+            margin: 20px auto;
+            border-collapse: collapse;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            background-color: #fff;
+          }
+          th, td {
+            padding: 12px;
+            text-align: center;
+            border: 1px solid #ddd;
+          }
+          th {
+            background-color: #007BFF;
+            color: #fff;
+          }
+          tr:nth-child(even) {
+            background-color: #f2f2f2;
+          }
+          tr:hover {
+            background-color: #ddd;
+          }
+          h1 {
+            text-align: center;
+            color: #333;
+          }
+          button {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background-color: #28a745;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+          }
+          button:hover {
+            background-color: #218838;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Pacientes Ordenados por Próxima Cita</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Edad</th>
+              <th>Estado del Paciente</th>
+              <th>Próxima Cita</th>
+              <th>Fecha de Ingreso</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    // Generar filas de la tabla con los datos ordenados
+    results.forEach(paciente => {
+      html += `
+        <tr>
+          <td>${paciente.nombre}</td>
+          <td>${paciente.edad}</td>
+          <td>${paciente.estado_paciente || 'N/A'}</td>
+          <td>${new Date(paciente.proxima_cita).toLocaleString()}</td>
+          <td>${new Date(paciente.fecha_ingreso).toLocaleString()}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+        <button onclick="window.location.href='/ordenar-pacientes'">Ordenar por Próxima Cita</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+// Iniciar el servidor
+app.listen(4011, () => {
+  console.log('Servidor corriendo en http://localhost:4011');
+});
+
+###login.html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Iniciar Sesión</title>
+</head>
+<body>
+  <h2>Iniciar Sesión</h2>
+  <form action="/login" method="POST">
+    <label for="nombre_usuario">Nombre de Usuario:</label>
+    <input type="text" id="nombre_usuario" name="nombre_usuario" required>
+    <br>
+    <label for="contrasena">Contraseña:</label>
+    <input type="password" id="contrasena" name="contrasena" required>
+    <br>
+    <button type="submit">Iniciar Sesión</button>
+  </form>
+  <p>¿No tienes cuenta? <a href="/registro.html">Regístrate</a></p>
+</body>
+</html>
+
+###registro.html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Registro de Usuario</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h2>Registro de Usuario</h2>
+  <form action="/registro" method="POST">
+    <label for="nombre_usuario">Nombre de Usuario:</label>
+    <input type="text" id="nombre_usuario" name="nombre_usuario" required>
+    <br>
+    <label for="password">Contraseña:</label>
+    <input type="password" id="password" name="password" required>
+    <br>
+    <label for="rol">Rol:</label>
+    <select id="rol" name="rol" required>
+      <option value="medico">Médico</option>
+      <option value="administrador">Administrador</option>
+    </select>
+    <br>
+    <button type="submit">Registrar</button>
+  </form>
+  <p>¿Ya tienes cuenta? <a href="/login.html">Inicia sesión</a></p>
+</body>
+</html>
+
+###pacientes.html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Base de datos hospital</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Bienvenido a la Base de datos del hospital</h1>
+  <p>Pacientes rgistrados</p>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestión de Pacientes</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <form action="/submit-data" method="POST">
+       
+        <label for="name">Nombre del paciente:</label>
+        <input type="text" id="name" name="nombre" placeholder="Nombre completo" required>
+        
+        <label for="age">Edad:</label>
+        <input type="number" id="age" name="edad" placeholder="Edad del paciente" min="0" required>
+      
+        <label for="estado_paciente">Estado del paciente:</label>
+        <input type="text" id="estado_paciente" name="estado_paciente" placeholder="Descripción del estado actual" required>
+      
+        <label for="proxima_cita">Próxima cita:</label>
+        <input type="datetime-local" id="proxima_cita" name="proxima_cita">
+      
+        <button type="submit">Guardar</button>
+      </form>
+      <button onclick="window.location.href='/pacientes'">Ver Pacientes Guardados</button>
+      <h2>Buscar Pacientes</h2>
+<form action="/buscar-pacientes" method="GET">
+  <label for="name-search">Nombre del paciente:</label>
+  <input type="text" id="name-search" name="name_search">
+  
+  <label for="age-search">Edad del paciente:</label>
+  <input type="number" id="age-search" name="age_search">
+  
+  <button type="submit">Buscar</button>
+  
+</form>
+<button onclick="window.location.href='/ordenar-pacientes'">Ordenar por Próxima Cita</button>
+</form>
+
+###styles.css
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    color: #333;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh; /* Para centrar en toda la pantalla */
+    flex-direction: column;
+}
+
+h1 {
+    text-align: center;
+    color: #0056b3;
+    margin-bottom: 20px;
+}
+
+/* Contenedor principal */
+.container {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 1200px;
+}
+
+.left-section {
+    flex: 1;
+    text-align: center;
+    padding: 20px;
+}
+
+.right-section {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Formulario */
+form {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    width: 100%;
+    max-width: 400px;
+    margin: auto;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+    color: #0056b3;
+}
+
+input, button {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 16px;
+}
+
+input:focus {
+    border-color: #0056b3;
+    outline: none;
+    box-shadow: 0 0 5px rgba(0, 86, 179, 0.5);
+}
+
+/* Botones */
+button {
+    background-color: #28a745;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background-color: #218838;
+}
+
+button:active {
+    background-color: #1e7e34;
+}
+table {
+    width: 80%;
+    margin: 20px auto;
+    border-collapse: collapse;
+  }
+  
+  th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+  }
+  
+  th {
+    background-color: #4CAF50;
+    color: white;
+  }
+  
+  tr:hover {
+    background-color: #f5f5f5;
+  }
+  
+  button {
+    display: block;
+    margin: 20px auto;
+    padding: 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  
+  button:hover {
+    background-color: #0056b3;
+  }
+
+/* Ajustes responsivos */
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .left-section {
+        margin-bottom: 20px;
+    }
+}
+
